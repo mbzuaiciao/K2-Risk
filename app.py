@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import re
 import tempfile
 from pathlib import Path
 
@@ -21,6 +23,8 @@ from k2_reasoner import (
     summarize_exposures,
     summarize_history,
 )
+from k2_reasoner.ade import ade_available
+from k2_reasoner.llm import gemini_available, openrouter_available
 
 APP_ROOT = Path(__file__).parent
 SAMPLE_FILE = APP_ROOT / "data" / "sample_portfolio.csv"
@@ -45,13 +49,28 @@ def _render_history_schema() -> None:
         st.dataframe(history_df, use_container_width=True, hide_index=True)
 
 
+def _clean_scenario_sentences(text: str, limit: int = 4) -> list[str]:
+    sentences = breakdown_sentences(text)
+    cleaned: list[str] = []
+    for sentence in sentences:
+        sanitized = re.sub(r"<:.*?:>", "", sentence)
+        sanitized = re.sub(r"\s+", " ", sanitized).strip()
+        sanitized = sanitized.lstrip("•-–# ")
+        sanitized = sanitized.strip()
+        if sanitized:
+            cleaned.append(sanitized)
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+
 def main() -> None:
     st.set_page_config(page_title="K2 Risk Reasoner", layout="wide")
     st.title("K2 Risk — Multi-Asset Reasoning Copilot")
     st.caption("Translate raw sensitivities into causal explanations using K2 Risk.")
 
     if "llm_choice" not in st.session_state:
-        st.session_state["llm_choice"] = "Rule engine (offline)"
+        st.session_state["llm_choice"] = "Auto (Gemini)"
     if "user_question" not in st.session_state:
         st.session_state["user_question"] = ""
 
@@ -71,6 +90,22 @@ def main() -> None:
         st.session_state["history_sample_toggle"] = True
     if "scenario_sample_toggle" not in st.session_state:
         st.session_state["scenario_sample_toggle"] = True
+
+    def _resolve_llm_provider(choice: str) -> tuple[str | None, str, str | None]:
+        lowered = choice.lower()
+        if "openrouter" in lowered:
+            available = openrouter_available()
+            provider = "openrouter" if available else None
+            label = "OpenRouter (cloud)"
+            note = None if available else "OpenRouter API key missing; falling back to the rule engine."
+            return provider, label, note
+        if "rule" in lowered:
+            return None, "Local rule engine", None
+        available = gemini_available()
+        provider = "gemini" if available else None
+        label = "Gemini (cloud)" if available else "Local rule engine"
+        note = None if available else "Gemini credentials missing; falling back to the deterministic engine."
+        return provider, label, note
 
     (
         about_tab,
@@ -108,7 +143,7 @@ def main() -> None:
 - 📈 **Multi-Asset Coverage:** Rates, credit, FX, commodities, and equities.
 - 🤔 **Counterfactual Reasoning:** Stress-test “what if” scenarios.
 - 🎯 **Cross-Asset Interactions:** Trace how shocks propagate across factors.
-- ⚡ **Real-Time Insights:** Toggle Gemini to generate richer narratives.
+- ⚡ **Real-Time Insights:** Automatically taps Gemini/OpenRouter when configured for richer narratives.
 """
         )
         st.subheader("Example Questions")
@@ -179,38 +214,42 @@ def main() -> None:
     with settings_tab:
         st.subheader("Settings")
         engine_options = [
+            "Auto (Gemini)",
+            "OpenRouter (cloud)",
             "Rule engine (offline)",
-            "Gemini (cloud)",
-            "OpenAI (coming soon)",
-            "Anthropic (coming soon)",
-            "Free LLM API (coming soon)",
         ]
+        current_choice = st.session_state.get("llm_choice", engine_options[0])
+        try:
+            default_index = engine_options.index(current_choice)
+        except ValueError:
+            default_index = 0
         selection = st.selectbox(
-            "Reasoning engine",
+            "Reasoning engine preference",
             options=engine_options,
-            key="llm_choice",
-            help="Gemini is available today; other providers are placeholders for upcoming integrations.",
+            index=default_index,
+            help="Auto mode tries Gemini when configured, otherwise falls back to the deterministic rules. Select OpenRouter to prefer that API instead.",
         )
-        if selection != st.session_state.get("analysis_engine_prev"):
+        if selection != current_choice:
+            st.session_state["llm_choice"] = selection
             st.session_state["analysis_ready"] = False
             st.session_state["analysis_snapshot"] = ""
-            st.session_state["analysis_engine_prev"] = selection
-        st.caption("The selected model is used once you submit a question.")
+            st.session_state["scenario_results"] = []
+        st.caption(
+            "Provide GEMINI_API_KEY or OPENROUTER_API_KEY (plus their optional model overrides) to unlock cloud responses."
+        )
 
     user_question = st.session_state.get("user_question")
-    llm_choice = st.session_state.get("llm_choice", "Rule engine (offline)")
-    current_snapshot = f"{user_question}|{llm_choice}"
+    llm_choice = st.session_state.get("llm_choice", "Auto (Gemini)")
+    llm_provider, engine_label, provider_note = _resolve_llm_provider(llm_choice)
+    engine_key = f"{llm_choice}|{llm_provider or 'rule'}"
+    current_snapshot = f"{user_question}|{engine_key}"
+    scenario_llm_provider = llm_provider if llm_provider in {"gemini", "openrouter"} else None
+    ade_enabled = ade_available()
     question_submitted = (
         st.session_state.get("analysis_ready")
         and st.session_state.get("analysis_snapshot") == current_snapshot
         and user_question
         and user_question.strip()
-    )
-    gemini_selected = "Gemini" in llm_choice
-    use_gemini = question_submitted and gemini_selected
-    unsupported_choice = question_submitted and llm_choice not in (
-        "Rule engine (offline)",
-        "Gemini (cloud)",
     )
 
     with positions_tab:
@@ -240,11 +279,13 @@ def main() -> None:
                 )
                 submitted = st.form_submit_button("Generate")
                 if submitted:
-                    st.session_state["analysis_snapshot"] = f"{st.session_state.get('user_question','')}|{st.session_state.get('llm_choice')}"
+                    st.session_state["analysis_snapshot"] = (
+                        f"{st.session_state.get('user_question','')}|{engine_key}"
+                    )
                     st.session_state["analysis_ready"] = True
                     st.session_state["analysis_trigger_id"] += 1
 
-            current_snapshot = f"{st.session_state.get('user_question','')}|{st.session_state.get('llm_choice')}"
+            current_snapshot = f"{st.session_state.get('user_question','')}|{engine_key}"
             if st.session_state["analysis_snapshot"] != current_snapshot:
                 st.session_state["analysis_ready"] = False
                 question_submitted = False
@@ -252,22 +293,10 @@ def main() -> None:
                 st.info("Enter a question and click Generate reasoning to run the selected engine.")
             else:
                 user_question = st.session_state.get("user_question")
-                llm_choice = st.session_state.get("llm_choice", "Rule engine (offline)")
-                use_gemini = "Gemini" in llm_choice
-                unsupported_choice = llm_choice not in (
-                    "Rule engine (offline)",
-                    "Gemini (cloud)",
-                )
-                chosen_label = llm_choice if user_question else "Rule engine (offline)"
-                engine_label = "Gemini (cloud)" if "Gemini" in chosen_label else "Local rule engine"
-                if unsupported_choice:
-                    engine_label = f"{llm_choice} (using rule engine until integration ships)"
-                engine_icon = "⚡️" if "Gemini" in chosen_label else "🛡️"
-                st.caption(f"{engine_icon} Reasoner source: {engine_label}. Change this in the Settings tab.")
-                if unsupported_choice:
-                    st.info(
-                        f"{llm_choice} routing is not wired yet; responses fall back to the offline rule engine."
-                    )
+                engine_icon = "⚡️" if llm_provider else "🛡️"
+                if provider_note:
+                    st.info(provider_note)
+                st.caption(f"{engine_icon} Reasoner source: {engine_label}.")
                 quick_answer = answer_simple_question(summary, user_question)
                 if quick_answer:
                     st.success(quick_answer)
@@ -276,7 +305,7 @@ def main() -> None:
                 reasoning = generate_reasoning_outputs(
                     portfolio,
                     user_question,
-                    use_gemini=use_gemini,
+                    llm_provider=llm_provider,
                 )
                 if reasoning.note:
                     st.info(reasoning.note)
@@ -301,29 +330,24 @@ def main() -> None:
             scenario_upload = st.file_uploader(
                 "Macro research PDF", type=["pdf"], key="scenario_pdf"
             )
-            scenario_use_gemini = gemini_selected
+            if scenario_llm_provider == "gemini":
+                st.caption("Gemini is enabled; qualitative bullets will receive inferred shocks.")
+            elif scenario_llm_provider == "openrouter":
+                st.caption("OpenRouter is enabled; qualitative bullets will receive inferred shocks.")
+            else:
+                st.caption(
+                    "Set GEMINI_API_KEY or OPENROUTER_API_KEY to enable LLM shock inference for qualitative bullets."
+                )
+            if ade_enabled:
+                ade_model = os.getenv("ADE_MODEL", "dpt-2-latest")
+                st.caption(f"Landing AI ADE enabled for PDF parsing (model {ade_model}).")
+            else:
+                st.caption("Provide ADE_API_KEY to parse PDFs via Landing AI ADE; otherwise local parsing is used.")
             use_sample_scenario = st.toggle(
                 "Use sample macro PDF",
                 value=st.session_state["scenario_sample_toggle"],
                 key="scenario_sample_toggle",
             )
-            auto_should_run = (
-                summary is not None
-                and not st.session_state["scenario_results"]
-                and scenario_upload is None
-                and use_sample_scenario
-                and SAMPLE_SCENARIO_PDF.exists()
-            )
-            if auto_should_run:
-                try:
-                    with st.spinner("Extracting sample scenarios..."):
-                        insights = build_scenario_insights(
-                            SAMPLE_SCENARIO_PDF, summary, use_gemini=scenario_use_gemini
-                        )
-                    st.session_state["scenario_results"] = insights
-                except Exception as exc:  # pragma: no cover
-                    st.warning(f"Sample scenario extraction failed: {exc}")
-
             if st.button("Extract scenarios", key="extract_scenarios"):
                 pdf_path: Path | None = None
                 temp_path: Path | None = None
@@ -340,10 +364,14 @@ def main() -> None:
                     st.warning("Provide a macro PDF or enable the sample file.")
                 else:
                     try:
-                        insights = build_scenario_insights(
-                            pdf_path, summary, use_gemini=scenario_use_gemini
+                        insights, ade_source = build_scenario_insights(
+                            pdf_path,
+                            summary,
+                            llm_provider=scenario_llm_provider,
+                            use_ade=ade_enabled,
                         )
                         st.session_state["scenario_results"] = insights
+                        st.session_state["scenario_source"] = ade_source
                         st.success(f"Parsed {len(insights)} scenarios from the document.")
                     except Exception as exc:  # pragma: no cover - best effort
                         st.error(f"Unable to parse scenarios: {exc}")
@@ -352,13 +380,22 @@ def main() -> None:
                             temp_path.unlink(missing_ok=True)
 
             insights = st.session_state.get("scenario_results", [])
+            ade_source = st.session_state.get("scenario_source")
+            if insights and ade_enabled:
+                if ade_source == "landing_ai":
+                    st.success("Landing AI ADE parsed this document successfully.")
+                else:
+                    st.warning("ADE parsing unavailable for this document; fell back to local PDF text extraction.")
             if insights:
                 for idx, insight in enumerate(insights, start=1):
                     st.markdown(f"**Scenario {idx}**")
-                    sentences = breakdown_sentences(insight.text)
+                    sentences = _clean_scenario_sentences(insight.text)
+                    raw_sentence_count = len(breakdown_sentences(insight.text))
                     if sentences:
                         for sentence in sentences:
                             st.markdown(f"- {sentence}")
+                        if raw_sentence_count > len(sentences):
+                            st.markdown("- …")
                     else:
                         st.markdown(f"- {insight.text}")
                     st.caption(
@@ -426,3 +463,14 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+def _clean_scenario_sentences(text: str, limit: int = 4) -> list[str]:
+    sentences = breakdown_sentences(text)
+    cleaned: list[str] = []
+    for sentence in sentences:
+        sanitized = re.sub(r"<:.*?:>", "", sentence)
+        sanitized = re.sub(r"\s+", " ", sanitized).strip()
+        if sanitized:
+            cleaned.append(sanitized)
+        if len(cleaned) >= limit:
+            break
+    return cleaned

@@ -2,10 +2,19 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+import os
 from pathlib import Path
 from typing import Dict, List
 
-from .llm import GeminiClientError, gemini_available, generate_scenario_shocks
+from .ade import ADEClientError, ade_available, extract_markdown as ade_markdown, parse_document as ade_parse
+from .llm import (
+    GeminiClientError,
+    OpenRouterClientError,
+    gemini_available,
+    generate_gemini_scenario_shocks,
+    generate_openrouter_scenario_shocks,
+    openrouter_available,
+)
 from .reasoner import ExposureSummary, summarize_exposures
 
 
@@ -25,14 +34,25 @@ class ScenarioInsight:
     note: str | None = None
 
 
-def extract_pdf_text(pdf_path: Path) -> str:
+def extract_pdf_text(pdf_path: Path, *, prefer_ade: bool = False) -> tuple[str, str | None]:
+    if prefer_ade and ade_available():
+        try:
+            model = os.getenv("ADE_MODEL")
+            split = os.getenv("ADE_SPLIT", "page") if os.getenv("ADE_SPLIT") else None
+            payload = ade_parse(file_path=pdf_path, model=model, split=split)
+            markdown = ade_markdown(payload)
+            if markdown.strip():
+                return markdown, "landing_ai"
+        except ADEClientError:
+            pass
+
     from pypdf import PdfReader
 
     reader = PdfReader(pdf_path.open("rb"))
     chunks: List[str] = []
     for page in reader.pages:
         chunks.append(page.extract_text() or "")
-    return "\n".join(chunks)
+    return "\n".join(chunks), None
 
 
 def derive_scenarios(raw_text: str) -> List[str]:
@@ -205,14 +225,24 @@ def _shocks_are_zero(shocks: Dict[str, float], tol: float = 1e-6) -> bool:
     return all(abs(value) <= tol for value in shocks.values())
 
 
-def _maybe_llm_shocks(text: str) -> tuple[Dict[str, float] | None, str | None]:
-    if not gemini_available():
-        return None, "Gemini scenario parser unavailable; used heuristic shocks."
-    try:
-        payload = generate_scenario_shocks(text)
-        return payload, "Gemini-derived shock magnitudes."
-    except GeminiClientError as exc:
-        return None, f"Gemini scenario parse failed: {exc}"
+def _maybe_llm_shocks(text: str, provider: str | None) -> tuple[Dict[str, float] | None, str | None]:
+    if provider == "gemini":
+        if not gemini_available():
+            return None, "Gemini scenario parser unavailable; used heuristic shocks."
+        try:
+            payload = generate_gemini_scenario_shocks(text)
+            return payload, "Gemini-derived shock magnitudes."
+        except GeminiClientError as exc:
+            return None, f"Gemini scenario parse failed: {exc}"
+    if provider == "openrouter":
+        if not openrouter_available():
+            return None, "OpenRouter scenario parser unavailable; used heuristic shocks."
+        try:
+            payload = generate_openrouter_scenario_shocks(text)
+            return payload, "OpenRouter-derived shock magnitudes."
+        except OpenRouterClientError as exc:
+            return None, f"OpenRouter scenario parse failed: {exc}"
+    return None, None
 
 
 def evaluate_custom_scenario(summary: ExposureSummary, shock: Dict[str, float]) -> str:
@@ -239,9 +269,13 @@ def breakdown_sentences(text: str) -> List[str]:
 
 
 def build_scenario_insights(
-    pdf_path: Path, summary: ExposureSummary, *, use_gemini: bool = False
-) -> List[ScenarioInsight]:
-    raw_text = extract_pdf_text(pdf_path)
+    pdf_path: Path,
+    summary: ExposureSummary,
+    *,
+    llm_provider: str | None = None,
+    use_ade: bool = False,
+) -> tuple[List[ScenarioInsight], str | None]:
+    raw_text, source = extract_pdf_text(pdf_path, prefer_ade=use_ade)
     bullets = derive_scenarios(raw_text)
     insights: List[ScenarioInsight] = []
     for bullet in bullets:
@@ -249,14 +283,14 @@ def build_scenario_insights(
         shocks = heuristics
         note: str | None = None
 
-        if use_gemini:
-            llm_shocks, llm_note = _maybe_llm_shocks(bullet)
+        if llm_provider:
+            llm_shocks, llm_note = _maybe_llm_shocks(bullet, llm_provider)
             note = llm_note
             if llm_shocks:
                 shocks = llm_shocks
         elif _shocks_are_zero(heuristics):
-            note = "Scenario text lacked explicit shocks; consider enabling Gemini for richer parsing."
+            note = "Scenario text lacked explicit shocks; configure GEMINI_API_KEY or OPENROUTER_API_KEY to enable LLM-derived magnitudes."
 
         impact = evaluate_custom_scenario(summary, shocks)
         insights.append(ScenarioInsight(text=bullet, shocks=shocks, impact=impact, note=note))
-    return insights
+    return insights, source

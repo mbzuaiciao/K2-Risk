@@ -12,11 +12,11 @@ The goal is to demonstrate how institutional PMs can interrogate cross-asset ris
 - CSV uploader or bundled `data/sample_portfolio.csv` for quick demos.
 - Aggregated metrics across rates, credit, FX, and equity.
 - Rule-based reasoning chain plus downloadable narrative report.
-- Optional Gemini API integration for richer natural-language reasoning (via settings tab).
+- Cloud LLM integrations (Gemini or OpenRouter) with automatic fallback to the rule engine.
 - Predefined counterfactual scenarios translating sensitivities into P&L impacts.
 - Plotly causal diagram showing how shocks propagate through the book.
 - Optional historical context upload with line chart + key day callouts.
-- Scenario tab that ingests macro research PDFs (sample included) and maps inferred shocks into portfolio impacts, with an optional Gemini fallback to infer magnitudes when documents stay qualitative.
+- Scenario tab that ingests macro research PDFs (sample included) and maps inferred shocks into portfolio impacts, with optional Gemini/OpenRouter support for magnitudes and Landing AI ADE-powered document parsing.
 
 ### Getting Started
 1. (Recommended) Create a virtual environment with Homebrew’s Python 3.10:
@@ -36,22 +36,17 @@ The goal is to demonstrate how institutional PMs can interrogate cross-asset ris
 4. Open the **Upload** tab inside the app to provide your CSVs or toggle the bundled samples (portfolio + `data/sample_history.csv` for historical context), then move to **Analysis**.
 5. (Optional) Visit the **Scenario** tab to parse macro PDFs; a sample file lives at `data/Macro_Research_Sample.pdf`.
 
-#### Optional: Enable Gemini Reasoning
-1. Install the extra dependency (already listed in `requirements.txt`).
-2. Copy `.env.example` to `.env` and fill in your key **or** export the variable in your shell.
-   ```bash
-   cp .env.example .env
-   # edit .env with your GEMINI_API_KEY (and optional GEMINI_MODEL)
-   ```
-   _Shell-based alternative_:
-   ```bash
-   export GEMINI_API_KEY="your-key-here"
-   ```
-3. (Optional) choose a different model (default: `models/gemini-1.0-pro`):
-   ```bash
-   export GEMINI_MODEL="gemini-1.5-pro"
-   ```
-4. In the **Settings** tab, choose *Gemini (cloud)* under “Reasoning engine.” The UI falls back to the deterministic engine if the SDK/key are missing or a request fails.
+#### Optional: Enable Cloud Reasoning (Gemini or OpenRouter)
+- Copy `.env.example` to `.env` (or export env vars directly) and provide the credentials for whichever provider you prefer. The app automatically routes reasoning + scenario parsing through the chosen engine and falls back to the deterministic rules when keys are missing.
+
+**Gemini**
+1. `export GEMINI_API_KEY="your-key-here"`
+2. (Optional) `export GEMINI_MODEL="gemini-1.5-pro"` to override the default `models/gemini-1.0-pro`.
+
+**OpenRouter**
+1. `export OPENROUTER_API_KEY="your-key-here"`
+2. (Optional) `export OPENROUTER_MODEL="openrouter/llama-3.1-70b-instruct"` (or any model OpenRouter supports).
+3. (Optional) `export OPENROUTER_SITE_URL` and `OPENROUTER_APP_NAME` so OpenRouter can attribute calls to your app.
 
 ### Portfolio Schema
 | Column | Description |
@@ -80,9 +75,14 @@ The goal is to demonstrate how institutional PMs can interrogate cross-asset ris
 ### Macro Scenario Parser
 - Drop a macro PDF into the Scenario tab or use `data/Macro_Research_Sample.pdf`.
 - The parser (via `pypdf`) extracts bullet points, infers rate/credit/FX/equity shocks, and pipes them through the portfolio sensitivities.
-- When scenarios are purely qualitative, enable *Gemini (cloud)* in Settings so the LLM can infer reasonable shock magnitudes (defaults stay deterministic if Gemini is unavailable).
+- When scenarios are purely qualitative, set `GEMINI_API_KEY` or `OPENROUTER_API_KEY` so the LLM can infer reasonable shock magnitudes (defaults stay deterministic if no LLM is configured). Provide `ADE_API_KEY` to have Landing AI ADE handle PDF parsing.
 - Customize the PDF structure for better extraction; the parser is heuristic and meant for demos.
 
 ### Notes
-- The reasoning engine can call Gemini for richer language output or fall back to the deterministic rules in `k2_reasoner/reasoner.py`.
+- The reasoning engine can call Gemini or OpenRouter for richer language output or fall back to the deterministic rules in `k2_reasoner/reasoner.py`.
 - Extend `run_counterfactuals` with custom scenarios or connect to real stress-test libraries.
+**Landing AI ADE (PDF parsing)**
+1. `export ADE_API_KEY="your-ade-api-key"`
+2. (Optional) override `ADE_MODEL` (default `dpt-2-latest`) or `ADE_ENDPOINT` if your org uses the EU endpoint.
+3. (Optional) `export ADE_SPLIT=page` to receive page-level splits.
+4. When ADE credentials are present, the Scenario tab uploads PDFs to ADE instead of using the local `pypdf` extractor; failures automatically fall back to the local parser.

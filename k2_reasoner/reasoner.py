@@ -7,7 +7,15 @@ from typing import Dict, List, Tuple
 import pandas as pd
 
 from .portfolio import Portfolio
-from .llm import GeminiClientError, gemini_available, generate_reasoning_response, parse_reasoning_payload
+from .llm import (
+    GeminiClientError,
+    OpenRouterClientError,
+    gemini_available,
+    generate_openrouter_reasoning,
+    generate_reasoning_response,
+    openrouter_available,
+    parse_reasoning_payload,
+)
 
 
 @dataclass
@@ -254,22 +262,21 @@ def _fallback_artifacts(summary: ExposureSummary, question: str, note: str | Non
 
 
 def generate_reasoning_outputs(
-    portfolio: Portfolio, question: str | None, use_gemini: bool = False
+    portfolio: Portfolio, question: str | None, llm_provider: str | None = None
 ) -> ReasoningArtifacts:
-    """Create reasoning chain + narrative, optionally via Gemini."""
+    """Create reasoning chain + narrative via selected LLM (or rule engine)."""
 
     summary = summarize_exposures(portfolio)
     query = question or "Explain current risk posture."
 
-    if use_gemini:
+    if llm_provider == "gemini":
         if not gemini_available():
             note = "Gemini SDK or API key missing; fell back to deterministic reasoning."
             return _fallback_artifacts(summary, query, note=note)
-
         try:
             prompt = _build_prompt(summary, query)
             response_text = generate_reasoning_response(prompt)
-            payload = parse_reasoning_payload(response_text)
+            payload = parse_reasoning_payload(response_text, error_cls=GeminiClientError)
             chain = [step.strip() for step in payload["chain"] if step.strip()]
             narrative = payload["narrative"]
             if chain and narrative:
@@ -278,6 +285,24 @@ def generate_reasoning_outputs(
             return _fallback_artifacts(summary, query, note=note)
         except GeminiClientError as exc:
             note = f"Gemini request failed ({exc}); reverted to deterministic reasoning."
+            return _fallback_artifacts(summary, query, note=note)
+
+    if llm_provider == "openrouter":
+        if not openrouter_available():
+            note = "OpenRouter API key missing; reverted to deterministic reasoning."
+            return _fallback_artifacts(summary, query, note=note)
+        try:
+            prompt = _build_prompt(summary, query)
+            response_text = generate_openrouter_reasoning(prompt)
+            payload = parse_reasoning_payload(response_text, error_cls=OpenRouterClientError)
+            chain = [step.strip() for step in payload["chain"] if step.strip()]
+            narrative = payload["narrative"]
+            if chain and narrative:
+                return ReasoningArtifacts(chain=chain, narrative=narrative, source="openrouter")
+            note = "OpenRouter response lacked usable content; reverted to deterministic reasoning."
+            return _fallback_artifacts(summary, query, note=note)
+        except OpenRouterClientError as exc:
+            note = f"OpenRouter request failed ({exc}); reverted to deterministic reasoning."
             return _fallback_artifacts(summary, query, note=note)
 
     return _fallback_artifacts(summary, query)

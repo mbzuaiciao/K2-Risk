@@ -39,18 +39,30 @@ class ScenarioParsingTests(unittest.TestCase):
 
     def test_maybe_llm_shocks_uses_gemini_payload(self) -> None:
         with mock.patch.object(scenario, "gemini_available", return_value=True), mock.patch.object(
-            scenario, "generate_scenario_shocks", return_value={"rate_bps": 30.0, "credit_bps": 10.0, "fx_move": 0.01, "equity_move": -0.02}
+            scenario,
+            "generate_gemini_scenario_shocks",
+            return_value={"rate_bps": 30.0, "credit_bps": 10.0, "fx_move": 0.01, "equity_move": -0.02},
         ):
-            payload, note = scenario._maybe_llm_shocks("Test scenario")
+            payload, note = scenario._maybe_llm_shocks("Test scenario", "gemini")
             self.assertIsNotNone(payload)
             self.assertEqual(payload["rate_bps"], 30.0)
             self.assertIn("Gemini-derived", note or "")
 
     def test_maybe_llm_shocks_handles_missing_sdk(self) -> None:
         with mock.patch.object(scenario, "gemini_available", return_value=False):
-            payload, note = scenario._maybe_llm_shocks("Scenario text")
+            payload, note = scenario._maybe_llm_shocks("Scenario text", "gemini")
             self.assertIsNone(payload)
             self.assertIn("unavailable", note or "")
+
+    def test_maybe_llm_shocks_openrouter_success(self) -> None:
+        with mock.patch.object(scenario, "openrouter_available", return_value=True), mock.patch.object(
+            scenario,
+            "generate_openrouter_scenario_shocks",
+            return_value={"rate_bps": -15.0, "credit_bps": 5.0, "fx_move": -0.02, "equity_move": 0.01},
+        ):
+            payload, note = scenario._maybe_llm_shocks("Scenario text", "openrouter")
+            self.assertEqual(payload["credit_bps"], 5.0)
+            self.assertIn("OpenRouter-derived", note or "")
 
 
 if __name__ == "__main__":
