@@ -1,0 +1,9 @@
+instrument,asset_class,notional,duration,dv01,convexity,credit_spread_dv01,fx_delta,beta,commentary
+UST 10Y Future,Rates,250,7.8,1250,18,0,0,0,"Core duration anchor"
+CDX HY Short,Credit,-80,-3.2,-420,-5,550,0,0,"Protection against credit stress"
+EURUSD Long,FX,50,0,0,0,0,18,0.1,"Dollar funding leg"
+S&P Put Spread,Equity,-60,0,0,0,0,0,-0.8,"Tail hedge"
+IG Corporates,Credit,120,5.5,420,4,480,0,0.2,"Carry exposure to IG"
+Japan Equities,Equity,90,0,0,0,0,0,1.2,"Pro-cyclical equity sleeve"
+EM FX Basket,FX,40,0,0,0,0,-32,0.3,"Short USD carry basket"
+Energy Equity Hedge,Equity,-30,0,0,0,0,0,-0.4,"Commodity hedge overlay"
