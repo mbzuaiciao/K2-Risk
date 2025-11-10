@@ -78,6 +78,17 @@ The goal is to demonstrate how institutional PMs can interrogate cross-asset ris
 - When scenarios are purely qualitative, set `GEMINI_API_KEY` or `OPENROUTER_API_KEY` so the LLM can infer reasonable shock magnitudes (defaults stay deterministic if no LLM is configured). Provide `ADE_API_KEY` to have Landing AI ADE handle PDF parsing.
 - Customize the PDF structure for better extraction; the parser is heuristic and meant for demos.
 
+### In-App Tabs
+- **About**: Summarizes the problem statement (opaque multi-asset risk) and the K2 Reasoner solution, mirroring the one-pager narrative.
+- **Upload**: Accepts user CSVs or toggles the bundled samples (portfolio + history). Schema expanders document required fields; ADE/LLM availability is surfaced in captions.
+- **Positions**: Displays the full portfolio table plus aggregate metrics (Notional, DV01, Credit DV01, FX Delta) so users can sanity-check exposures immediately.
+- **Analysis**: Central workflow for asking “Why?” questions. Users enter a prompt, pick Auto/Gemini, OpenRouter, or Rule in Settings, then view (a) quick deterministic answers, (b) a reasoning chain with source badges and fallback notes, and (c) a downloadable narrative.
+- **Scenario**: Upload or toggle a macro PDF, optionally parsed through ADE. Output shows cleaned bullet summaries, inferred shocks (with Gemini/OpenRouter/RULE attribution), and portfolio P&L impacts. ADE success/fallback messages clarify which parser was used.
+- **History**: Charts historical P&L (from the optional history CSV) and highlights the latest, best, and worst days with associated macro moves.
+- **Counterfactual**: Presents predefined what-if scenarios (rates, credit, FX, equity shocks) and decomposes the portfolio’s P&L response into factor contributions.
+- **Causal**: Renders a Plotly network graph linking rates, curve, credit, FX, equity, and P&L nodes so users can visualize inter-factor flow.
+- **Settings**: Lets users choose Auto (Gemini), OpenRouter, or Rule engine. Captions explain which APIs are active and when fallbacks kick in; changing providers resets the analysis state to avoid stale results.
+
 ### Notes
 - The reasoning engine can call Gemini or OpenRouter for richer language output or fall back to the deterministic rules in `k2_reasoner/reasoner.py`.
 - Extend `run_counterfactuals` with custom scenarios or connect to real stress-test libraries.
