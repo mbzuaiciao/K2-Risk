@@ -1,6 +1,6 @@
 ## K2 Risk – Multi-Asset Reasoning Copilot
 
-K2 Risk wraps portfolio sensitivities with an interpretable reasoning layer powered by the (mocked) **K2 Risk** engine. Upload a multi-asset portfolio and the app turns raw delta/ DV01/ beta vectors into:
+K2 Risk wraps portfolio sensitivities with an interpretable reasoning layer powered by the **K2 Risk** engine. Upload a multi-asset portfolio and the app turns raw delta/ DV01/ beta vectors into:
 
 - Narrative explanations that answer *why* risk exists.
 - Counterfactual stress tests (rates, credit, FX, equity shocks).
